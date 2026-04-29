@@ -1,0 +1,724 @@
+# Nova Pulse Manager 插件化架构重构计划书
+
+> 说明：本文档创建时默认采用 Socket.IO 作为通信方案；截至 2026-01-04，项目已完成 Phase 3 切换，通信层统一为 FastAPI（REST + WebSocket），Socket.IO 相关依赖与代码已移除。通信细节请以 `docs/refactor-executive-summary.md` 与 `docs/phase3-fastapi-migration-summary.md` 为准。
+
+## 文档信息
+
+- **项目名称**: Nova Pulse Manager
+- **文档版本**: 1.0.0
+- **创建日期**: 2025-12-31
+- **文档类型**: 架构重构计划书
+
+---
+
+## 1. 项目概述
+
+### 1.1 重构目标
+
+将Nova Pulse Manager从NiceGUI+Python单体架构重构为Electron+Python插件化架构,实现以下核心目标:
+
+1. **前端现代化**: 使用Electron框架提供现代化桌面应用体验
+2. **后端保持**: Python实现核心业务逻辑,保留现有设备控制能力
+3. **任务插件化**: 任务系统完全插件化,支持热插拔
+4. **任务市场**: 设计任务市场机制,支持插件发布、下载、安装
+5. **自定义编排**: 支持用户自定义任务执行顺序和策略
+6. **向后兼容**: 现有任务可平滑迁移为插件形式
+
+### 1.2 当前架构分析
+
+**现有技术栈**:
+- 前端: NiceGUI (Python Web框架)
+- 后端: Python 3.12 + asyncio
+- 数据库: SQLite + Peewee ORM
+- 设备控制: ADB (Android Debug Bridge)
+- 图像识别: OpenCV + OCR
+
+**核心组件**:
+- `main.py`: 应用入口,初始化日志、ADB、数据库
+- `GuiApp.py`: NiceGUI界面,管理Module和MainProcess
+- `MainProcess.py`: 任务编排器,硬编码任务列表
+- `TaskBase.py`: 任务基类,提供设备控制、模板匹配等通用方法
+- 具体任务: Permanent、Order、Radar等继承TaskBase
+- `AdbClient.py`: ADB命令封装
+- 数据模型: Config(全局配置)、Module(任务配置)、Template(图像模板)
+
+**架构特点**:
+- 单体架构,GUI和业务逻辑耦合
+- 任务系统基于继承,硬编码在MainProcess中
+- 缺乏扩展性,添加新任务需要修改核心代码
+- **已支持多设备**: 通过Module表的simulator_index字段区分设备,每个Module独立运行
+
+---
+
+## 2. 目标架构设计
+
+### 2.1 整体架构
+
+**多设备支持**: 新架构完全保留并增强现有的多设备能力,每个Module可以独立配置设备连接和任务工作流。
+
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Electron 前端层                         │
+│  ┌──────────────────┐         ┌──────────────────┐          │
+│  │  Main Process    │  IPC    │ Renderer Process │          │
+│  │  - 生命周期管理   │◄───────►│  - React UI      │          │
+│  │  - 窗口管理       │         │  - 状态管理       │          │
+│  │  - WebSocket客户端│         │  - 组件库         │          │
+│  └────────┬─────────┘         └──────────────────┘          │
+└───────────┼─────────────────────────────────────────────────┘
+            │ WebSocket (socket.io)
+            │ JSON消息格式
+┌───────────▼─────────────────────────────────────────────────┐
+│                      Python 后端层                           │
+│  ┌──────────────────┐  ┌──────────────────┐                 │
+│  │  Core Service    │  │  Plugin System   │                 │
+│  │  - 任务调度器     │  │  - PluginManager │                 │
+│  │  - 设备管理       │  │  - PluginLoader  │                 │
+│  │  - WebSocket服务  │  │  - PluginBase    │                 │
+│  └──────────────────┘  └──────────────────┘                 │
+│  ┌──────────────────┐  ┌──────────────────┐                 │
+│  │  Marketplace     │  │  Installed       │                 │
+│  │  - 市场客户端     │  │  Plugins         │                 │
+│  │  - 下载验证       │  │  - permanent_task│                 │
+│  │  - 安装管理       │  │  - order_task    │                 │
+│  └──────────────────┘  └──────────────────┘                 │
+└───────────┬─────────────────────────────────────────────────┘
+            │
+┌───────────▼─────────────────────────────────────────────────┐
+│                      数据层                                  │
+│  SQLite Database                                            │
+│  - config (全局配置)                                         │
+│  - module (任务配置)                                         │
+│  - plugin (插件元数据) [新增]                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 技术选型
+
+#### 2.2.1 前后端通信
+
+**选择: WebSocket (socket.io)**
+
+**依据**: 
+- 双向通信,支持服务器主动推送
+- 适合实时状态更新场景
+- 成熟的库支持(python-socketio, socket.io-client)
+
+**替代方案对比**:
+- IPC: 仅限Electron内部,不适合跨进程
+- ZeroMQ: 性能更高但复杂度大,MVP阶段不需要
+- HTTP REST: 单向通信,需要轮询,不适合实时场景
+
+**消息协议**:
+```json
+{
+  "type": "task.start|task.stop|task.status|plugin.install|...",
+  "payload": {...},
+  "request_id": "uuid"
+}
+```
+
+#### 2.2.2 插件系统
+
+**选择: 自研Plugin Manager + importlib**
+
+**依据**:
+- 参考stevedore设计,使用importlib实现动态加载
+- 轻量级,满足项目需求
+- 支持热重载(importlib.reload)
+
+**核心组件**:
+```python
+# PluginBase: 插件基类,继承TaskBase
+class PluginBase(TaskBase):
+    name: str
+    version: str
+    description: str
+    author: str
+    
+    async def on_install(self): pass
+    async def on_uninstall(self): pass
+    async def on_enable(self): pass
+    async def on_disable(self): pass
+
+# PluginManager: 插件管理器
+class PluginManager:
+    def discover_plugins(self, plugin_dir: Path) -> List[PluginMetadata]
+    def load_plugin(self, plugin_id: str) -> PluginBase
+    def unload_plugin(self, plugin_id: str) -> None
+    def reload_plugin(self, plugin_id: str) -> None
+```
+
+**插件结构**:
+```
+installed_plugins/
+└── example_plugin/
+    ├── manifest.json  # 元数据
+    ├── plugin.py      # 实现
+    ├── requirements.txt
+    └── assets/        # 资源文件
+```
+
+**manifest.json格式**:
+```json
+{
+  "id": "permanent-task",
+  "name": "常驻任务",
+  "version": "1.0.0",
+  "author": "作者",
+  "description": "描述",
+  "entry_point": "plugin.py:PermanentPlugin",
+  "dependencies": [],
+  "config_schema": {...}
+}
+```
+
+#### 2.2.3 任务市场
+
+**MVP方案: GitHub Releases + JSON索引**
+
+**索引格式**:
+```json
+{
+  "version": "1.0",
+  "plugins": [
+    {
+      "id": "permanent-task",
+      "name": "常驻任务",
+      "version": "1.0.0",
+      "download_url": "https://github.com/.../releases/download/...",
+      "checksum": "sha256:...",
+      "min_app_version": "2.0.0"
+    }
+  ]
+}
+```
+
+**未来升级方案**: 独立服务器API,支持评分、评论、统计
+
+### 2.3 项目目录结构
+
+```
+nova-pulse-manager/
+├── frontend/                 # Electron前端
+│   ├── main/                # Main Process
+│   │   ├── index.js        # 入口
+│   │   ├── websocket-client.js
+│   │   ├── ipc-handlers.js
+│   │   └── preload.js
+│   ├── renderer/           # Renderer Process
+│   │   ├── src/
+│   │   │   ├── components/ # React组件
+│   │   │   ├── pages/      # 页面
+│   │   │   ├── api/        # API调用
+│   │   │   └── App.tsx
+│   │   └── index.html
+│   └── package.json
+├── backend/                 # Python后端
+│   ├── core/               # 核心服务
+│   │   ├── device/         # 设备操作(AdbClient等)
+│   │   ├── scheduler/      # 任务调度器
+│   │   └── websocket/      # WebSocket服务
+│   ├── plugins/            # 插件系统
+│   │   ├── base.py         # 插件基类
+│   │   ├── manager.py      # 插件管理器
+│   │   ├── loader.py       # 插件加载器
+│   │   └── exceptions.py   # 异常定义
+│   ├── marketplace/        # 任务市场客户端
+│   │   └── client.py
+│   ├── database/           # 数据库
+│   │   ├── models/
+│   │   │   ├── config.py
+│   │   │   ├── module.py
+│   │   │   └── plugin.py   # 新增
+│   │   └── migrations/
+│   ├── installed_plugins/  # 已安装插件
+│   │   ├── permanent_task/
+│   │   ├── order_task/
+│   │   └── radar_task/
+│   ├── main.py             # 后端入口
+│   └── requirements.txt
+└── docs/                   # 文档
+    ├── architecture.md
+    ├── plugin-api.md
+    ├── database-design.md
+    ├── websocket-protocol.md
+    └── migration-guide.md
+```
+
+---
+
+## 3. 数据库设计
+
+### 3.1 新增表结构
+
+```sql
+-- 插件表
+CREATE TABLE plugin (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_id TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    enabled BOOLEAN DEFAULT 1,
+    config TEXT,  -- JSON格式
+    manifest TEXT,  -- JSON格式
+    installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 索引
+CREATE INDEX idx_plugin_id ON plugin(plugin_id);
+CREATE INDEX idx_plugin_enabled ON plugin(enabled);
+```
+
+### 3.2 扩展现有表
+
+```sql
+-- Module表新增字段
+ALTER TABLE module ADD COLUMN plugin_workflow TEXT;  -- JSON格式,存储任务编排配置
+
+-- 保留现有字段
+-- simulator_index: 设备端口索引,用于多设备支持
+-- 其他配置字段保持不变
+```
+
+### 3.3 向后兼容
+
+- 保留config表(全局配置)
+- 保留module表(任务配置)
+- 新增plugin表(插件元数据)
+- 提供数据迁移脚本
+
+---
+
+## 4. 向后兼容策略
+
+### 4.1 代码兼容
+
+**TaskBase保留**:
+- 完整保留TaskBase类及所有方法
+- PluginBase继承TaskBase
+- 现有任务方法(return_home, attack, combat_checks等)全部可用
+
+**设备操作保留**:
+- AdbClient完整保留
+- DeviceUtils完整保留
+- ControlTools完整保留
+
+**工具类保留**:
+- LogManager
+- LoadTemplates
+- OcrTools, TimeTools, ImageTools
+
+### 4.2 数据兼容
+
+**数据库迁移**:
+- 增量迁移,不删除现有表
+- 新增plugin表
+- Module表添加plugin_workflow字段
+- 提供迁移脚本和回滚机制
+
+**配置迁移**:
+- 现有Module配置保留
+- 新增plugin_workflow字段存储任务编排
+- 提供配置转换工具
+
+### 4.3 任务迁移
+
+**现有任务转为内置插件**:
+- Permanent → permanent_task插件
+- Order → order_task插件
+- Radar → radar_task插件
+- Start → start_task插件
+
+**迁移方式**:
+- 包装现有代码为插件格式
+- 核心逻辑不变
+- 添加manifest.json元数据
+- 写入plugin表
+
+---
+
+## 5. 实施路线图
+
+### 5.1 阶段1: 后端核心 (4-6周)
+
+#### Week 1-2: 插件系统基础
+- [ ] 创建项目目录结构
+- [ ] 编写架构设计文档
+- [ ] 实现PluginBase类(继承TaskBase)
+- [ ] 实现PluginManager(发现、加载、卸载)
+- [ ] 实现PluginLoader(解析manifest、验证)
+- [ ] 添加单元测试
+
+#### Week 3-4: WebSocket服务
+- [ ] 安装python-socketio依赖
+- [ ] 实现WebSocketServer类
+- [ ] 实现消息处理器(on_connect, on_task_start等)
+- [ ] 实现消息批处理机制
+- [ ] 实现错误处理
+- [ ] 集成到main.py
+
+#### Week 5-6: 内置插件迁移
+- [ ] 数据库扩展(plugin表、索引)
+- [ ] 迁移Permanent为permanent_task插件
+- [ ] 迁移Order为order_task插件
+- [ ] 迁移Radar为radar_task插件
+- [ ] 迁移Start为start_task插件
+- [ ] 编写数据迁移脚本
+
+### 5.2 阶段2: 前端开发 (4-6周)
+
+#### Week 1-2: Electron框架搭建
+- [ ] 初始化前端项目(package.json)
+- [ ] 创建Main Process(index.js)
+- [ ] 创建Renderer Process(React+TypeScript)
+- [ ] 实现IPC通信(preload.js)
+- [ ] 配置开发环境(热重载)
+- [ ] 配置构建流程(electron-builder)
+
+#### Week 3-4: 核心UI
+- [ ] 实现WebSocket客户端(Main Process)
+- [ ] 创建任务列表组件(TaskList.tsx)
+- [ ] 创建任务控制组件(TaskControl.tsx)
+- [ ] 创建日志显示组件(LogViewer.tsx)
+- [ ] 创建配置界面(SettingsPage.tsx)
+- [ ] 实现状态管理(Context/Redux)
+
+#### Week 5-6: 插件管理UI
+- [ ] 创建插件列表页面(PluginsPage.tsx)
+- [ ] 创建插件卡片组件(PluginCard.tsx)
+- [ ] 实现插件操作(启用/禁用/卸载)
+- [ ] 创建插件配置对话框(PluginConfigDialog.tsx)
+- [ ] 实现本地安装插件功能
+- [ ] 实现插件详情页
+
+### 5.3 阶段3: 任务市场 (2-3周)
+
+#### Week 1: 市场客户端
+- [ ] 实现MarketplaceClient类
+- [ ] 实现fetch_index(获取插件索引)
+- [ ] 实现download_plugin(下载插件)
+- [ ] 实现verify_checksum(校验和验证)
+- [ ] 实现install_plugin(安装插件)
+- [ ] 实现update_plugin(更新插件)
+
+#### Week 2: 市场UI
+- [ ] 创建任务市场页面(MarketplacePage.tsx)
+- [ ] 实现插件浏览(网格/列表)
+- [ ] 实现搜索过滤功能
+- [ ] 创建插件详情对话框
+- [ ] 实现安装功能(进度显示)
+- [ ] 实现更新检查
+
+#### Week 3: 任务编排
+- [ ] 安装react-flow库
+- [ ] 创建任务编排页面(WorkflowEditorPage.tsx)
+- [ ] 实现插件节点(可拖拽)
+- [ ] 实现连接线(执行顺序)
+- [ ] 实现工具栏(插件列表)
+- [ ] 实现保存/加载工作流
+
+### 5.4 阶段4: 测试与发布 (2-3周)
+
+#### Week 1: 功能测试
+- [ ] 单元测试(后端)
+- [ ] 集成测试(前后端通信)
+- [ ] 插件加载测试
+- [ ] 任务执行测试
+- [ ] UI功能测试
+
+#### Week 2: 性能测试
+- [ ] WebSocket通信性能
+- [ ] 插件加载性能
+- [ ] 内存使用测试
+- [ ] 大量日志性能测试
+- [ ] 性能优化
+
+#### Week 3: 发布准备
+- [ ] 用户验收测试
+- [ ] 文档完善(用户手册、插件开发指南)
+- [ ] 打包配置(Windows/macOS/Linux)
+- [ ] 发布说明编写
+- [ ] 版本发布
+
+---
+
+## 6. 关键技术实现
+
+### 6.1 插件热重载
+
+```python
+import importlib
+import sys
+
+def reload_plugin(plugin_id: str):
+    module_name = f"installed_plugins.{plugin_id}.plugin"
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
+    else:
+        importlib.import_module(module_name)
+```
+
+### 6.2 插件隔离
+
+```python
+async def safe_plugin_call(plugin: PluginBase, method: str, *args, **kwargs):
+    try:
+        return await getattr(plugin, method)(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"Plugin {plugin.name} error: {e}")
+        raise PluginExecutionError(f"Plugin {plugin.name} failed") from e
+```
+
+### 6.3 任务编排
+
+```json
+{
+  "workflow": [
+    {"plugin_id": "start_task", "config": {...}},
+    {"plugin_id": "permanent_task", "config": {...}},
+    {"plugin_id": "order_task", "config": {...}}
+  ]
+}
+```
+
+### 6.4 WebSocket消息批处理
+
+```python
+class WebSocketServer:
+    def __init__(self):
+        self._message_queue = asyncio.Queue()
+        self._batch_size = 10
+        self._batch_interval = 0.1  # 100ms
+    
+    async def _batch_sender(self):
+        while True:
+            messages = []
+            try:
+                for _ in range(self._batch_size):
+                    msg = await asyncio.wait_for(
+                        self._message_queue.get(), 
+                        timeout=self._batch_interval
+                    )
+                    messages.append(msg)
+            except asyncio.TimeoutError:
+                pass
+            
+            if messages:
+                await self.emit('batch', messages)
+```
+
+---
+
+## 7. 性能优化
+
+### 7.1 插件懒加载
+
+```python
+class PluginManager:
+    def __init__(self):
+        self._loaded_plugins = {}  # 已加载插件缓存
+        self._plugin_metadata = {}  # 插件元数据(轻量)
+    
+    def get_plugin(self, plugin_id: str):
+        if plugin_id not in self._loaded_plugins:
+            self._loaded_plugins[plugin_id] = self.load_plugin(plugin_id)
+        return self._loaded_plugins[plugin_id]
+```
+
+### 7.2 数据库索引
+
+```sql
+CREATE INDEX idx_plugin_id ON plugin(plugin_id);
+CREATE INDEX idx_plugin_enabled ON plugin(enabled);
+CREATE INDEX idx_module_name ON module(name);
+```
+
+### 7.3 日志虚拟滚动
+
+前端日志显示使用虚拟滚动技术,只渲染可见区域的日志,提升大量日志场景的性能。
+
+---
+
+## 8. 风险与缓解
+
+### 8.1 技术风险
+
+| 风险 | 影响 | 概率 | 缓解措施 |
+|------|------|------|----------|
+| 插件兼容性破坏 | 高 | 中 | API版本化,保持向后兼容 |
+| WebSocket通信不稳定 | 中 | 低 | 自动重连、心跳检测 |
+| 插件热重载内存泄漏 | 中 | 中 | 显式清理、弱引用 |
+| 性能下降 | 中 | 低 | 性能基准测试、监控 |
+
+### 8.2 业务风险
+
+| 风险 | 影响 | 概率 | 缓解措施 |
+|------|------|------|----------|
+| 用户迁移失败 | 高 | 低 | 详细迁移文档、迁移工具 |
+| 恶意插件 | 高 | 中 | 代码审查、社区举报 |
+| 插件生态不活跃 | 中 | 中 | 官方示例插件、开发文档 |
+
+---
+
+## 9. 成功标准
+
+### 9.1 功能完整性
+
+- [ ] 所有现有功能正常工作
+- [ ] 插件系统稳定运行
+- [ ] 任务市场可用
+- [ ] 任务编排功能完整
+
+### 9.2 性能指标
+
+- [ ] 应用启动时间 < 5秒
+- [ ] 插件加载时间 < 1秒
+- [ ] WebSocket消息延迟 < 100ms
+- [ ] 内存占用 < 500MB
+
+### 9.3 用户体验
+
+- [ ] UI响应流畅
+- [ ] 操作直观易用
+- [ ] 错误提示清晰
+- [ ] 文档完善
+
+---
+
+## 10. 后续规划
+
+### 10.1 短期(1-3个月)
+
+- 插件热重载优化
+- 任务编排可视化增强
+- 性能优化
+- 插件开发工具
+
+### 10.2 中期(3-6个月)
+
+- 插件沙箱
+- 云同步配置
+- 插件市场服务器
+- 社区生态建设
+
+### 10.3 长期(6个月+)
+
+- 插件评分评论系统
+- 插件依赖管理
+- 多语言支持
+- 跨平台优化
+
+---
+
+## 11. 多设备并发支持详解
+
+### 11.1 现有多设备机制
+
+**当前实现**:
+- Module表的`simulator_index`字段标识不同设备(对应ADB端口)
+- GuiApp维护`processes`字典,key为Module名称,value为MainProcess实例
+- 每个MainProcess独立连接一个ADB设备
+- 可以同时启动多个Module,实现多设备并发
+
+**示例**:
+```python
+# 现有代码
+Module.create(name="设备1", simulator_index=0)  # 连接127.0.0.1:5555
+Module.create(name="设备2", simulator_index=1)  # 连接127.0.0.1:5556
+Module.create(name="设备3", simulator_index=2)  # 连接127.0.0.1:5557
+```
+
+### 11.2 新架构的多设备增强
+
+**保留机制**:
+- Module表的`simulator_index`字段完全保留
+- 每个Module仍然对应一个独立的任务调度器
+- AdbClient连接逻辑不变
+
+**新增能力**:
+1. **独立工作流**: 每个Module可以配置不同的插件工作流
+2. **设备分组**: 可以为不同设备组配置不同的插件组合
+3. **并发监控**: 前端UI实时显示所有设备的任务状态
+4. **资源隔离**: 每个设备的日志、配置、状态完全独立
+
+**架构实现**:
+```python
+# 后端 TaskScheduler
+class TaskScheduler:
+    def __init__(self, module_name: str):
+        self.module = Module.get(Module.name == module_name)
+        self.device_port = 5555 + self.module.simulator_index
+        self.adb_client = AdbClient(
+            name=module_name,
+            ip="127.0.0.1",
+            port=self.device_port
+        )
+        # 加载该Module的插件工作流
+        self.workflow = json.loads(self.module.plugin_workflow)
+```
+
+**前端UI**:
+```typescript
+// 设备列表显示
+interface DeviceStatus {
+  moduleName: string;
+  devicePort: number;
+  status: 'running' | 'stopped' | 'paused';
+  currentPlugin: string;
+  logs: string[];
+}
+
+// 支持同时显示多个设备的状态
+```
+
+### 11.3 并发性能
+
+**理论上限**: 受限于系统资源和ADB连接数
+- 单机推荐: 5-10个设备并发
+- 优化后: 可支持20+设备
+
+**性能优化**:
+- 插件懒加载减少内存占用
+- WebSocket批处理减少通信开销
+- 异步任务执行避免阻塞
+
+### 11.4 使用场景
+
+**场景1: 多账号管理**
+- 设备1: 主账号,执行完整任务流程
+- 设备2: 小号1,仅执行常驻任务
+- 设备3: 小号2,仅执行订单任务
+
+**场景2: 任务分工**
+- 设备1-3: 执行常驻任务(打怪、采集)
+- 设备4-5: 执行每日任务(订单、雷达)
+- 设备6: 执行活动任务
+
+**场景3: 测试环境**
+- 设备1: 生产环境,稳定版插件
+- 设备2: 测试环境,测试新插件
+
+---
+
+## 12. 附录
+
+### 11.1 参考资料
+
+- Electron官方文档: https://www.electronjs.org/docs
+- python-socketio文档: https://python-socketio.readthedocs.io/
+- stevedore文档: https://docs.openstack.org/stevedore/
+- React Flow文档: https://reactflow.dev/
+
+### 11.2 相关文档
+
+- [架构设计文档](./architecture.md)
+- [插件API规范](./plugin-api.md)
+- [数据库设计文档](./database-design.md)
+- [WebSocket通信协议](./websocket-protocol.md)
+- [迁移指南](./migration-guide.md)
+
+---
+
+**文档结束**

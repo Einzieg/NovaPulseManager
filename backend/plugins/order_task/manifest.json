@@ -1,0 +1,8 @@
+{
+  "id": "order-task",
+  "name": "订单任务",
+  "version": "1.0.0",
+  "author": "Nova Pulse Manager",
+  "description": "自动完成订单提交、PCBA使用、制造加速、天赋切换等功能",
+  "entry_point": "plugin.py:OrderPlugin"
+}

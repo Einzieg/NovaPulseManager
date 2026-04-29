@@ -1,0 +1,8 @@
+{
+  "id": "permanent-task",
+  "name": "常驻任务",
+  "version": "1.0.0",
+  "author": "Nova Pulse Manager",
+  "description": "自动执行常驻任务,包括攻击怪物和采集残骸",
+  "entry_point": "plugin.py:PermanentPlugin"
+}

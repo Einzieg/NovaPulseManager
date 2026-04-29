@@ -1,0 +1,8 @@
+{
+  "id": "start-task",
+  "name": "启动任务",
+  "version": "1.0.0",
+  "author": "Nova Pulse Manager",
+  "description": "自动启动模拟器和游戏",
+  "entry_point": "plugin.py:StartPlugin"
+}

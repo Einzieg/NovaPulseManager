@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin
 
@@ -11,6 +12,9 @@ from pydantic import BaseModel
 
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / "frontend" / "src" / "types" / "api.generated.ts"
 SCHEMAS_MODULE = "backend.core.api.schemas"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _try_run_pydantic2ts_cli(output_path: Path) -> bool:

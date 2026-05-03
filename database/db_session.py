@@ -7,12 +7,9 @@ from pathlib import Path
 
 from peewee import SqliteDatabase
 
-db_path = os.path.join(Path(__file__).resolve().parent.parent, 'database', 'nova_auto_script.db')
-print(db_path)
-if not os.path.exists(db_path):
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+DEFAULT_DB_PATH = Path(__file__).resolve().parent / 'nova_auto_script.db'
 
-db = SqliteDatabase(db_path)
+db = SqliteDatabase(str(DEFAULT_DB_PATH))
 
 _logger = logging.getLogger(__name__)
 
@@ -51,22 +48,79 @@ def _discover_plugin_models() -> list:
     return models
 
 
-def init_database():
+def _ensure_column(table_name: str, column_name: str, column_sql: str) -> None:
+    existing = {column.name for column in db.get_columns(table_name)}
+    if column_name not in existing:
+        db.execute_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+
+def _migrate_workflow_graph_json() -> None:
+    import json
+    from datetime import datetime
+
+    from backend.application.services.workflow_compat import normalize_workflow_graph
+    from backend.models import SchemaVersion, Workflow
+
+    migrated = 0
+    for workflow in Workflow.select():
+        if workflow.graph_json:
+            continue
+
+        try:
+            graph = normalize_workflow_graph(json.loads(workflow.workflow_data))
+        except Exception as e:
+            _logger.warning(f"跳过工作流 graph_json 迁移 {workflow.workflow_id}: {e}")
+            continue
+
+        workflow.graph_json = json.dumps(graph, ensure_ascii=False)
+        workflow.save()
+        migrated += 1
+
+    SchemaVersion.replace(
+        name="workflow_graph",
+        version=2,
+        updated_at=datetime.now(),
+    ).execute()
+
+    if migrated:
+        _logger.info(f"迁移 {migrated} 个工作流到 graph_json")
+
+
+def init_database(
+    db_path: str | os.PathLike[str] | None = None,
+    *,
+    include_legacy: bool = False,
+):
+    target_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if db.database != str(target_path):
+        if not db.is_closed():
+            db.close()
+        db.init(str(target_path))
+
     db.connect(reuse_if_open=True)
-    from backend.models import Config, Module, Plugin, Workflow, DeviceConfig, PluginConfig
+    from backend.models import Config, Plugin, Workflow, DeviceConfig, SchemaVersion
     from backend.models.CommonConfig import CommonConfig
 
-    # Legacy tables
-    db.create_tables([Module], safe=True)
+    if include_legacy or os.getenv("NOVA_INIT_LEGACY_TABLES") == "1":
+        from backend.models.Module import Module
+        from backend.models.PluginConfig import PluginConfig
+
+        db.create_tables([Module, PluginConfig], safe=True)
+
     db.create_tables([Config], safe=True)
     db.create_tables([Plugin], safe=True)
     db.create_tables([Workflow], safe=True)
+    _ensure_column("workflow", "graph_json", "TEXT")
 
     # Core tables
-    db.create_tables([DeviceConfig, PluginConfig, CommonConfig], safe=True)
+    db.create_tables([DeviceConfig, CommonConfig, SchemaVersion], safe=True)
 
     # Plugin-specific tables (auto-discovered)
     plugin_models = _discover_plugin_models()
     if plugin_models:
         db.create_tables(plugin_models, safe=True)
         _logger.info(f"自动生成 {len(plugin_models)} 插件配置表")
+
+    _migrate_workflow_graph_json()

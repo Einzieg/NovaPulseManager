@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "module",
+  "id": "radar",
+  "name": "Radar",
+  "description": "Legacy radar task bridge metadata",
+  "actions": [
+    {
+      "id": "run",
+      "name": "Run",
+      "description": "Legacy radar_task bridge metadata",
+      "entry_point": "actions.py:RadarRunAction"
+    }
+  ]
+}

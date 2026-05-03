@@ -11,8 +11,8 @@ from backend.core.plugins.manager import PluginManager
 
 def test_order_plugin_discovery():
     """测试订单插件能否被发现"""
-    manager = PluginManager()
-    plugins = manager.discover_plugins()
+    manager = PluginManager(ROOT_DIR / "backend/plugins")
+    plugins = {plugin["id"]: plugin for plugin in manager.discover_plugins()}
     
     print("=== 已发现的插件 ===")
     for plugin_id, plugin_info in plugins.items():
@@ -27,8 +27,6 @@ def test_order_plugin_discovery():
     assert order_plugin["version"] == "1.0.0"
     assert order_plugin["author"] == "Nova Pulse Manager"
     print("✅ 测试通过：插件元数据验证成功")
-    
-    return True
 
 
 def test_order_plugin_manifest():
@@ -45,8 +43,6 @@ def test_order_plugin_manifest():
     
     assert manifest["entry_point"] == "plugin.py:OrderPlugin"
     print("✅ 测试通过：manifest.json 格式正确")
-    
-    return True
 
 
 def test_order_plugin_syntax():
@@ -54,13 +50,8 @@ def test_order_plugin_syntax():
     import py_compile
     plugin_path = ROOT_DIR / "backend/plugins/order_task/plugin.py"
     
-    try:
-        py_compile.compile(str(plugin_path), doraise=True)
-        print("✅ 测试通过：plugin.py 语法检查成功")
-        return True
-    except py_compile.PyCompileError as e:
-        print(f"❌ 语法错误: {e}")
-        return False
+    py_compile.compile(str(plugin_path), doraise=True)
+    print("✅ 测试通过：plugin.py 语法检查成功")
 
 
 if __name__ == "__main__":

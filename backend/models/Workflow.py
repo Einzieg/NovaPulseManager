@@ -12,6 +12,7 @@ class Workflow(Model):
     description = TextField(null=True)
     module_name = CharField(index=True)  # 关联Module
     workflow_data = TextField()  # JSON格式: {nodes, edges}
+    graph_json = TextField(null=True)  # schema v2 graph JSON
     is_active = BooleanField(default=True)
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)

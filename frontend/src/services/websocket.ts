@@ -1,3 +1,9 @@
+import { listApps } from '../api/apps';
+import { listActions } from '../api/actions';
+import * as deviceApi from '../api/devices';
+import * as workflowApi from '../api/workflows';
+import * as runApi from '../api/runs';
+
 type AnyCallback = (data: any) => void;
 
 class WebSocketService {
@@ -165,24 +171,32 @@ class WebSocketService {
     return this.httpGet('/api/v1/plugins');
   }
 
+  async getAppList() {
+    return listApps();
+  }
+
+  async getActionList() {
+    return listActions();
+  }
+
   async getDeviceList() {
-    return this.httpGet('/api/v1/devices');
+    return deviceApi.listDevices();
   }
 
   async createDevice(payload: { name: string; simulator_index: number; port: number }) {
-    return this.httpPost('/api/v1/devices/create', payload);
+    return deviceApi.createDevice(payload);
   }
 
   async updateDevice(payload: { device_id: number; name: string; simulator_index: number; port: number }) {
-    return this.httpPost('/api/v1/devices/update', payload);
+    return deviceApi.updateDevice(payload);
   }
 
   async deleteDevice(payload: { device_id: number }) {
-    return this.httpPost('/api/v1/devices/delete', payload);
+    return deviceApi.deleteDevice(payload);
   }
 
   async saveWorkflow(moduleName: string, workflowData: any) {
-    return this.httpPost('/api/v1/workflows/save', { module_name: moduleName, workflow_data: workflowData });
+    return workflowApi.saveWorkflow(moduleName, workflowData);
   }
 
   async loadWorkflow(moduleName: string) {
@@ -190,7 +204,7 @@ class WebSocketService {
   }
 
   async listWorkflows(moduleName: string) {
-    return this.httpGet(`/api/v1/workflows/list?module_name=${encodeURIComponent(moduleName)}`);
+    return workflowApi.listWorkflows(moduleName);
   }
 
   async getWorkflow(workflowId: string, moduleName?: string) {
@@ -202,22 +216,23 @@ class WebSocketService {
   }
 
   async deleteWorkflow(workflowId: string) {
-    return this.httpPost('/api/v1/workflows/delete', { workflow_id: workflowId });
+    return workflowApi.deleteWorkflow(workflowId);
   }
 
   async setCurrentWorkflow(deviceId: number, workflowId: string | null) {
-    return this.httpPost('/api/v1/workflows/set-current', {
-      device_id: deviceId,
-      workflow_id: workflowId,
-    });
+    return workflowApi.setCurrentWorkflow(deviceId, workflowId);
   }
 
   async startWorkflow(moduleName: string, workflowId: string) {
-    return this.httpPost('/api/v1/workflows/start', { module_name: moduleName, workflow_id: workflowId });
+    return workflowApi.startWorkflow(moduleName, workflowId);
+  }
+
+  async startRun(workflowId: string) {
+    return runApi.startRun(workflowId);
   }
 
   async stopWorkflow(moduleName: string) {
-    return this.httpPost('/api/v1/workflows/stop', { module_name: moduleName });
+    return workflowApi.stopWorkflow(moduleName);
   }
 
   async getPluginConfig(deviceName: string, pluginId: string) {

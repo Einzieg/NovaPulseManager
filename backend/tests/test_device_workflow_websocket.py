@@ -2,8 +2,8 @@
 
 覆盖：
 - 设备新增/编辑(含改名)/删除
-- 改名同步 Workflow.module_name 与 workflow_data JSON
-- 多工作流：set_current / delete 清理 PluginConfig.current_workflow_id
+- 改名同步 Workflow.module_name；workflow JSON 不再依赖设备名同步
+- 多工作流：set_current / delete 清理 CommonConfig.current_workflow_id
 - 工作流 start/stop（stop 需能在运行中停止）
 """
 
@@ -15,7 +15,7 @@ from uuid import uuid4
 import pytest
 
 from backend.core.websocket import MessageHandlers
-from backend.models import DeviceConfig, PluginConfig, Workflow
+from backend.models import CommonConfig, DeviceConfig, Workflow
 from database.db_session import init_database
 
 
@@ -47,16 +47,16 @@ def handlers(ws_broadcaster):
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
+def setup_database(temp_db_path):
     """初始化DB，并清理 pytest 前缀的测试数据，避免污染开发库。"""
 
-    init_database()
+    init_database(db_path=temp_db_path)
     yield
 
     # 先删 Workflow（不依赖 DeviceConfig 外键）
     Workflow.delete().where(Workflow.module_name.startswith(TEST_DEVICE_PREFIX)).execute()
 
-    # 再删 PluginConfig + DeviceConfig
+    # 再删 CommonConfig + DeviceConfig
     device_ids = [
         d.id
         for d in DeviceConfig.select(DeviceConfig.id).where(
@@ -64,7 +64,7 @@ def setup_database():
         )
     ]
     if device_ids:
-        PluginConfig.delete().where(PluginConfig.device.in_(device_ids)).execute()
+        CommonConfig.delete().where(CommonConfig.device.in_(device_ids)).execute()
         DeviceConfig.delete().where(DeviceConfig.id.in_(device_ids)).execute()
 
 
@@ -86,7 +86,7 @@ async def test_device_create_and_plugin_config_one_to_one(handlers):
     db_device = DeviceConfig.get(DeviceConfig.id == device["id"])
     assert db_device.name == name
 
-    cfgs = list(PluginConfig.select().where(PluginConfig.device == db_device.id))
+    cfgs = list(CommonConfig.select().where(CommonConfig.device == db_device.id))
     assert len(cfgs) == 1
 
 
@@ -148,15 +148,15 @@ async def test_device_update_rename_syncs_workflows_and_clears_scheduler_cache(h
     assert updated["device"]["simulator_index"] == 2
     assert updated["device"]["port"] == 18002
 
-    # 1) 工作流 module_name & workflow_data JSON 同步
+    # 1) 工作流归属同步；workflow_data JSON 保持原始内容
     for wf_id in (wf1_id, wf2_id):
         wf = Workflow.get(Workflow.workflow_id == wf_id)
         assert wf.module_name == new_name
         data = json.loads(wf.workflow_data)
-        assert data["module_name"] == new_name
+        assert data["module_name"] == old_name
 
     # 2) current_workflow_id 保持不变（workflow_id 不变）
-    plugin_cfg = PluginConfig.get(PluginConfig.device == device_id)
+    plugin_cfg = CommonConfig.get(CommonConfig.device == device_id)
     assert plugin_cfg.current_workflow_id == wf1_id
     assert plugin_cfg.workflow_enabled is True
 
@@ -212,7 +212,7 @@ async def test_device_delete_soft_deletes_workflows_and_clears_scheduler(handler
     assert deleted["deleted"] is True
 
     assert DeviceConfig.get_or_none(DeviceConfig.id == device_id) is None
-    assert PluginConfig.select().where(PluginConfig.device == device_id).count() == 0
+    assert CommonConfig.select().where(CommonConfig.device == device_id).count() == 0
 
     wf = Workflow.get(Workflow.workflow_id == wf_id)
     assert wf.is_active is False
@@ -308,7 +308,7 @@ async def test_workflow_delete_clears_plugin_config_reference(handlers):
     wf = Workflow.get(Workflow.workflow_id == wf_id)
     assert wf.is_active is False
 
-    plugin_cfg = PluginConfig.get(PluginConfig.device == device_id)
+    plugin_cfg = CommonConfig.get(CommonConfig.device == device_id)
     assert plugin_cfg.current_workflow_id is None
     assert plugin_cfg.workflow_enabled is False
 

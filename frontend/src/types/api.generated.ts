@@ -4,6 +4,24 @@
 
 export type WorkflowStatus = 'running' | 'completed' | 'failed';
 
+export interface ConfigResponse {
+  dark_mode?: boolean;
+  cap_tool?: string;
+  touch_tool?: string;
+  email?: string | null;
+  password?: string | null;
+  receiver?: string | null;
+}
+
+export interface ConfigUpdateRequest {
+  dark_mode?: boolean | null;
+  cap_tool?: string | null;
+  touch_tool?: string | null;
+  email?: string | null;
+  password?: string | null;
+  receiver?: string | null;
+}
+
 export interface DeleteWorkflowRequest {
   workflow_id: string;
 }
@@ -61,6 +79,17 @@ export interface NodeStatusUpdate {
   error?: string | null;
 }
 
+export interface PluginConfigGetRequest {
+  device_name: string;
+  plugin_id: string;
+}
+
+export interface PluginConfigUpdateRequest {
+  device_name: string;
+  plugin_id: string;
+  config: Record<string, any>;
+}
+
 export interface PluginItem {
   id: string;
   name: string;
@@ -75,7 +104,7 @@ export interface PluginListResponse {
 
 export interface SaveWorkflowRequest {
   module_name: string;
-  workflow_data: WorkflowData;
+  workflow_data: WorkflowDataV2 | WorkflowData;
 }
 
 export interface SetCurrentWorkflowRequest {
@@ -103,10 +132,23 @@ export interface StopWorkflowRequest {
 
 export interface WorkflowData {
   id: string;
+  schema_version?: number | null;
   name?: string;
   module_name?: string | null;
   description?: string | null;
   nodes?: WorkflowNode[];
+  edges?: WorkflowEdge[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface WorkflowDataV2 {
+  schema_version?: 2;
+  id: string;
+  name?: string;
+  module_name?: string | null;
+  description?: string | null;
+  nodes?: WorkflowNodeV2[];
   edges?: WorkflowEdge[];
   created_at?: string | null;
   updated_at?: string | null;
@@ -124,7 +166,19 @@ export interface WorkflowListResponse {
 
 export interface WorkflowNode {
   id: string;
-  plugin_id: string;
+  plugin_id?: string | null;
+  position: WorkflowPosition;
+  config?: Record<string, any>;
+}
+
+export interface WorkflowNodeV2 {
+  id: string;
+  type?: 'action';
+  app_id: string;
+  module_id: string;
+  action_id: string;
+  action_ref: string;
+  device_id?: number | null;
   position: WorkflowPosition;
   config?: Record<string, any>;
 }
@@ -142,22 +196,4 @@ export interface WorkflowSummary {
   is_active?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
-}
-
-export interface ConfigData {
-  dark_mode: boolean;
-  cap_tool: string;
-  touch_tool: string;
-  email: string | null;
-  password: string | null;
-  receiver: string | null;
-}
-
-export interface ConfigUpdateRequest {
-  dark_mode?: boolean;
-  cap_tool?: string;
-  touch_tool?: string;
-  email?: string | null;
-  password?: string | null;
-  receiver?: string | null;
 }

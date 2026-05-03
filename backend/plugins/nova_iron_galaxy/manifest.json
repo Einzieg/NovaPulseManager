@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "application",
+  "id": "nova_iron_galaxy",
+  "name": "Nova: Iron Galaxy",
+  "version": "1.0.0",
+  "description": "Legacy Nova: Iron Galaxy automation support",
+  "author": "Einzieg",
+  "platform": "android",
+  "package_name": "com.stone3.ig",
+  "runtime": "runtime.py:NovaIronGalaxyRuntime",
+  "modules": [
+    "startup",
+    "permanent",
+    "order",
+    "radar"
+  ]
+}

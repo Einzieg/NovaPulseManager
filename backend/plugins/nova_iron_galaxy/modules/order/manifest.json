@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "module",
+  "id": "order",
+  "name": "Order",
+  "description": "Legacy order task bridge metadata",
+  "actions": [
+    {
+      "id": "run",
+      "name": "Run",
+      "description": "Legacy order_task bridge metadata",
+      "entry_point": "actions.py:OrderRunAction"
+    }
+  ]
+}

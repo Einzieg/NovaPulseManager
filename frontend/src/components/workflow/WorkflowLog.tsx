@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import websocketService from '../../services/websocket';
-import { NodeStatusUpdate, WorkflowStatus } from '../../types/workflow';
+import { NodeStatusUpdate, WorkflowStatus } from '../../types/api.generated';
 
 interface LogEntry {
   nodeId: string;

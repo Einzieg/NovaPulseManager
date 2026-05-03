@@ -21,7 +21,7 @@ import NodeConfigPanel from './NodeConfigPanel';
 import WorkflowLog from './WorkflowLog';
 import { toast } from 'sonner';
 import websocketService from '../../services/websocket';
-import { WorkflowData, NodeStatusUpdate } from '../../types/workflow';
+import { WorkflowData, NodeStatusUpdate } from '../../types/api.generated';
 import ConfirmModal from '../common/ConfirmModal';
 import { Save, Play, Trash2, Zap, Plus, Layers } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -33,9 +33,10 @@ const nodeTypes = {
 interface WorkflowEditorProps {
   moduleName: string;
   workflowId?: string;
+  deviceId?: number;
 }
 
-const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, workflowId }) => {
+const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, workflowId, deviceId }) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -84,8 +85,13 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
             type: 'plugin',
             position: n.position,
             data: {
-              label: n.plugin_id.split('.').pop() || n.plugin_id,
-              plugin_id: n.plugin_id,
+              label: n.action_id || n.plugin_id?.split('.').pop() || n.action_ref?.split('.').pop() || n.id,
+              plugin_id: n.plugin_id || n.action_ref,
+              app_id: n.app_id,
+              module_id: n.module_id,
+              action_id: n.action_id,
+              action_ref: n.action_ref,
+              device_id: n.device_id ?? deviceId ?? null,
               status: 'idle',
               config: n.config || {}
             },
@@ -191,13 +197,20 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
     setIsSaving(true);
     try {
       const workflowData = {
+        schema_version: 2,
         id: currentWorkflowId,
         name: `${moduleName} Workflow`,
         description: `Workflow for module ${moduleName}`,
         module_name: moduleName,
         nodes: nodes.map((n) => ({
           id: n.id,
+          type: 'action',
           plugin_id: n.data.plugin_id,
+          app_id: n.data.app_id,
+          module_id: n.data.module_id,
+          action_id: n.data.action_id,
+          action_ref: n.data.action_ref,
+          device_id: n.data.device_id ?? deviceId ?? null,
           position: n.position,
           config: n.data.config || {},
         })),
@@ -226,7 +239,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
     } finally {
       setIsSaving(false);
     }
-  }, [currentWorkflowId, moduleName, nodes, edges]);
+  }, [currentWorkflowId, moduleName, nodes, edges, deviceId]);
 
   // Auto-save logic
   useEffect(() => {
@@ -249,7 +262,10 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
         description: `执行顺序: ${nodes.length} 个节点`,
       });
       
-      await websocketService.startWorkflow(moduleName, currentWorkflowId);
+      const run = await websocketService.startRun(currentWorkflowId);
+      if (run?.run_id) {
+        toast.success('工作流已启动', { description: `Run ID: ${run.run_id}` });
+      }
     } catch (error) {
       console.error('Start failed:', error);
       toast.error('执行失败', {
@@ -270,11 +286,14 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
       if (!reactFlowWrapper.current || !reactFlowInstance) return;
 
       const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-      const pluginData = JSON.parse(event.dataTransfer.getData('application/reactflow'));
+      const actionData = JSON.parse(event.dataTransfer.getData('application/reactflow'));
 
-      if (typeof pluginData === 'undefined' || !pluginData) {
+      if (typeof actionData === 'undefined' || !actionData) {
         return;
       }
+
+      const actionRef = actionData.action_ref || actionData.id;
+      const [appId, moduleId, actionId] = actionRef.split('.');
 
       const position = reactFlowInstance.project({
         x: event.clientX - reactFlowBounds.left,
@@ -286,8 +305,13 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
         type: 'plugin',
         position,
         data: {
-          label: pluginData.name,
-          plugin_id: pluginData.id,
+          label: actionData.name || actionId || actionRef,
+          plugin_id: actionData.plugin_id || actionRef,
+          app_id: actionData.app_id || appId,
+          module_id: actionData.module_id || moduleId,
+          action_id: actionData.action_id || actionId,
+          action_ref: actionRef,
+          device_id: deviceId ?? null,
           status: 'idle',
           config: {},
         },
@@ -295,8 +319,18 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
 
       setNodes((nds) => nds.concat(newNode));
     },
-    [reactFlowInstance, setNodes]
+    [reactFlowInstance, setNodes, deviceId]
   );
+
+  const onUpdateNodeConfig = useCallback((nodeId: string, config: Record<string, any>) => {
+    setNodes((nds) =>
+      nds.map((node) =>
+        node.id === nodeId
+          ? { ...node, data: { ...node.data, config } }
+          : node
+      )
+    );
+  }, [setNodes]);
 
   return (
     <div className="flex w-full h-full bg-transparent">
@@ -417,6 +451,7 @@ const WorkflowEditorContent: React.FC<WorkflowEditorProps> = ({ moduleName, work
           deviceName={moduleName}
           onClose={() => setSelectedNodeId(null)}
           onDelete={onDeleteNode}
+          onUpdateConfig={onUpdateNodeConfig}
         />
 
         {/* Execution Log Panel */}

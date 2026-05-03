@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "module",
+  "id": "permanent",
+  "name": "Permanent",
+  "description": "Legacy permanent task bridge metadata",
+  "actions": [
+    {
+      "id": "run",
+      "name": "Run",
+      "description": "Legacy permanent_task bridge metadata",
+      "entry_point": "actions.py:PermanentRunAction"
+    }
+  ]
+}

@@ -10,10 +10,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.core.websocket.handlers import MessageHandlers
 from backend.models import Workflow
+from database.db_session import init_database
 
 
-async def test_workflow_full_cycle():
+async def test_workflow_full_cycle(temp_db_path):
     """测试完整的工作流保存-加载-执行周期"""
+    init_database(db_path=temp_db_path)
     
     print("=" * 60)
     print("🧪 端到端工作流测试")

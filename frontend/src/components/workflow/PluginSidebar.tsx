@@ -2,49 +2,58 @@ import React, { useState, useEffect } from 'react';
 import { Search, Puzzle, ChevronRight, Info, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import websocketService from '../../services/websocket';
-
-interface Plugin {
-  id: string;
-  name: string;
-  description: string;
-  category?: string;
-  version?: string;
-  author?: string;
-}
+import type { AppItem } from '../../api/apps';
+import type { ActionItem } from '../../api/actions';
 
 const PluginSidebar: React.FC = () => {
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [apps, setApps] = useState<AppItem[]>([]);
+  const [actions, setActions] = useState<ActionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const fetchPlugins = async () => {
+    const fetchActions = async () => {
       try {
         setLoading(true);
-        const data = await websocketService.getPluginList();
-        const pluginList = Array.isArray(data?.plugins) ? data.plugins : (Array.isArray(data) ? data : []);
-        setPlugins(pluginList);
+        const [appsData, actionsData] = await Promise.all([
+          websocketService.getAppList(),
+          websocketService.getActionList(),
+        ]);
+        setApps(Array.isArray(appsData?.apps) ? appsData.apps : []);
+        setActions(Array.isArray(actionsData?.actions) ? actionsData.actions : []);
       } catch (error) {
-        console.error('Failed to fetch plugins:', error);
+        console.error('Failed to fetch actions:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchPlugins();
+    fetchActions();
   }, []);
 
-  const onDragStart = (event: React.DragEvent, plugin: Plugin) => {
-    event.dataTransfer.setData('application/reactflow', JSON.stringify(plugin));
+  const onDragStart = (event: React.DragEvent, action: ActionItem) => {
+    event.dataTransfer.setData('application/reactflow', JSON.stringify(action));
     event.dataTransfer.effectAllowed = 'move';
   };
 
   const normalizedQuery = searchQuery.toLowerCase();
-  const filteredPlugins = plugins.filter((plugin) => {
-    const name = (plugin.name ?? '').toLowerCase();
-    const id = (plugin.id ?? '').toLowerCase();
-    return name.includes(normalizedQuery) || id.includes(normalizedQuery);
+  const filteredActions = actions.filter((action) => {
+    const haystack = [
+      action.name,
+      action.action_ref,
+      action.app_id,
+      action.module_id,
+      action.action_id,
+    ].join(' ').toLowerCase();
+    return haystack.includes(normalizedQuery);
   });
+  const appNameById = new Map(apps.map((app) => [app.id, app.name]));
+  const groupedActions = filteredActions.reduce<Record<string, ActionItem[]>>((acc, action) => {
+    const key = `${action.app_id}/${action.module_id}`;
+    acc[key] = acc[key] || [];
+    acc[key].push(action);
+    return acc;
+  }, {});
 
   return (
     <aside className="w-80 h-full bg-ios-bg/90 backdrop-blur-[60px] border-r border-gray-200/40 flex flex-col shadow-[4px_0_32px_rgba(0,0,0,0.04)] z-10">
@@ -56,8 +65,8 @@ const PluginSidebar: React.FC = () => {
             <Puzzle size={22} className="text-gray-900 relative z-10" />
           </div>
           <div>
-            <h3 className="text-base font-extrabold tracking-tight text-gray-900 leading-none mb-1.5">流程库</h3>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">组件</p>
+            <h3 className="text-base font-extrabold tracking-tight text-gray-900 leading-none mb-1.5">Action 库</h3>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">APP / MODULE</p>
           </div>
         </div>
 
@@ -68,7 +77,7 @@ const PluginSidebar: React.FC = () => {
           </div>
           <input
             type="text"
-            placeholder="搜索流程..."
+            placeholder="搜索 Action..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className={clsx(
@@ -85,42 +94,53 @@ const PluginSidebar: React.FC = () => {
         {loading ? (
           <div className="h-40 flex flex-col items-center justify-center gap-3 text-gray-400">
             <Loader2 size={20} className="animate-spin" />
-            <span className="text-[10px] font-bold uppercase tracking-widest">Loading Plugins</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest">Loading Actions</span>
           </div>
-        ) : filteredPlugins.length > 0 ? (
-          filteredPlugins.map((plugin) => (
-            <div
-              key={plugin.id}
-              draggable
-              onDragStart={(e) => onDragStart(e, plugin)}
-              className={clsx(
-                "group relative p-5 rounded-[32px] bg-ios-surface/40 border border-white/60 cursor-grab active:cursor-grabbing",
-                "hover:bg-ios-surface/80 hover:shadow-[0_20px_40px_-12px_rgba(0,0,0,0.08)] hover:scale-[1.02]",
-                "transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.98]",
-                "overflow-hidden"
-              )}
-            >
-              {/* Glass Highlight */}
-              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent" />
-              
-              <div className="flex items-start justify-between mb-2">
-                <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.15em] bg-gray-100/50 px-2 py-0.5 rounded-full">
-                  {plugin.category ?? plugin.version ?? 'PLUGIN'}
-                </span>
-                <ChevronRight size={12} className="text-gray-300 group-hover:text-gray-900 group-hover:translate-x-0.5 transition-all" />
+        ) : filteredActions.length > 0 ? (
+          Object.entries(groupedActions).map(([group, groupActions]) => {
+            const [appId, moduleId] = group.split('/');
+            return (
+              <div key={group} className="space-y-2">
+                <div className="px-2">
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.18em]">
+                    {appNameById.get(appId) || appId}
+                  </p>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+                    {moduleId}
+                  </p>
+                </div>
+                {groupActions.map((action) => (
+                  <div
+                    key={action.action_ref}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, action)}
+                    className={clsx(
+                      "group relative p-5 rounded-[32px] bg-ios-surface/40 border border-white/60 cursor-grab active:cursor-grabbing",
+                      "hover:bg-ios-surface/80 hover:shadow-[0_20px_40px_-12px_rgba(0,0,0,0.08)] hover:scale-[1.02]",
+                      "transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.98]",
+                      "overflow-hidden"
+                    )}
+                  >
+                    <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent" />
+                    <div className="flex items-start justify-between mb-2">
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.15em] bg-gray-100/50 px-2 py-0.5 rounded-full">
+                        {action.action_ref}
+                      </span>
+                      <ChevronRight size={12} className="text-gray-300 group-hover:text-gray-900 group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                    <h4 className="text-sm font-bold text-gray-900 mb-1.5 tracking-tight">{action.name}</h4>
+                    <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 font-medium">
+                      {action.description}
+                    </p>
+                    <div className="absolute inset-0 rounded-[32px] border border-gray-200/10 pointer-events-none" />
+                  </div>
+                ))}
               </div>
-              <h4 className="text-sm font-bold text-gray-900 mb-1.5 tracking-tight">{plugin.name}</h4>
-              <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2 font-medium">
-                {plugin.description}
-              </p>
-              
-              {/* 物理描边增强 */}
-              <div className="absolute inset-0 rounded-[32px] border border-gray-200/10 pointer-events-none" />
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="h-40 flex flex-col items-center justify-center text-center px-4">
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">找不到可用流程</p>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">找不到可用 Action</p>
           </div>
         )}
       </div>

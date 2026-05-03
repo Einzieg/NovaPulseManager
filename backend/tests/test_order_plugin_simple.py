@@ -70,7 +70,7 @@ def test_directory_structure():
     print("\n>>> 测试目录结构...")
     plugin_dir = ROOT_DIR / "backend/plugins/order_task"
     
-    required_files = ["__init__.py", "manifest.json", "plugin.py"]
+    required_files = ["manifest.json", "plugin.py"]
     for file in required_files:
         file_path = plugin_dir / file
         assert file_path.exists(), f"缺少文件: {file}"

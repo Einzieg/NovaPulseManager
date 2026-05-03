@@ -124,7 +124,13 @@ class TaskScheduler:
             self.last_result = result
             self.is_running = False
 
-    async def start_workflow(self, workflow_data: dict) -> dict:
+    async def start_workflow(
+        self,
+        workflow_data: dict,
+        *,
+        run_id: str | None = None,
+        event_bus=None,
+    ) -> dict:
         """启动工作流执行"""
         if self.is_running:
             raise RuntimeError(f"模块 {self.module_name} 正在运行中")
@@ -132,14 +138,13 @@ class TaskScheduler:
         self.last_result = None
 
         try:
-            # 动态导入WorkflowExecutor,避免循环依赖
-            from backend.core.scheduler.workflow_executor import WorkflowExecutor
+            from backend.application.services.workflow_compat import normalize_workflow_graph
 
-            self.workflow_executor = WorkflowExecutor(
-                workflow_data=workflow_data,
-                plugin_manager=self.plugin_manager,
-                ws_server=self.ws_server,
-                module_name=self.module_name,
+            workflow_data = normalize_workflow_graph(workflow_data)
+            self.workflow_executor = self._create_workflow_executor(
+                workflow_data,
+                run_id=run_id,
+                event_bus=event_bus,
             )
 
             self.is_running = True
@@ -171,6 +176,47 @@ class TaskScheduler:
             await self._broadcast_module_status(reason="workflow_start_failed")
             self.logger.error(f"无法启动工作流程: {e}", exc_info=True)
             raise
+
+    def _create_workflow_executor(self, workflow_data: dict, *, run_id: str | None, event_bus):
+        if any(node.get("action_ref") for node in workflow_data.get("nodes", [])):
+            from backend.application.services import AppRuntimeManager
+            from backend.core.scheduler.workflow_executor_v2 import (
+                ActionExecutionContextFactory,
+                WorkflowExecutorV2,
+            )
+            from backend.infrastructure.plugins import (
+                ActionFactory,
+                PluginCatalog,
+                PluginClassLoader,
+            )
+
+            for node in workflow_data.get("nodes", []):
+                if node.get("action_ref") and node.get("device_id") is None:
+                    node["device_id"] = self.device_config.id
+
+            catalog = PluginCatalog(self.plugin_manager.plugins_dir)
+            catalog.discover()
+            loader = PluginClassLoader()
+            return WorkflowExecutorV2(
+                workflow_data=workflow_data,
+                run_id=run_id or f"workflow-{workflow_data.get('id', 'unknown')}",
+                app_runtime_manager=AppRuntimeManager(catalog, loader),
+                action_factory=ActionFactory(catalog, loader),
+                context_factory=ActionExecutionContextFactory(
+                    event_bus=event_bus,
+                    logger=self.logger,
+                ),
+            )
+
+        # 动态导入WorkflowExecutor,避免循环依赖
+        from backend.core.scheduler.workflow_executor import WorkflowExecutor
+
+        return WorkflowExecutor(
+            workflow_data=workflow_data,
+            plugin_manager=self.plugin_manager,
+            ws_server=self.ws_server,
+            module_name=self.module_name,
+        )
 
     async def stop_workflow(self) -> dict:
         """停止当前工作流执行"""

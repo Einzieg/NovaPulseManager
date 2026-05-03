@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.websocket import MessageHandlers
-from backend.models import DeviceConfig, PluginConfig, Workflow
+from backend.models import CommonConfig, DeviceConfig, Workflow
 from database.db_session import init_database
 
 MODULE_NAME = "pytest-module"
@@ -29,22 +29,20 @@ def handlers(ws_broadcaster):
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
-    init_database()
+def setup_database(temp_db_path):
+    init_database(db_path=temp_db_path)
 
     device, _ = DeviceConfig.get_or_create(
         name=MODULE_NAME,
         defaults={"simulator_index": 0, "port": 16384},
     )
 
-    # 保证该设备只有一个 PluginConfig（TaskBase 使用 get()）
-    PluginConfig.delete().where(PluginConfig.device == device.id).execute()
-    PluginConfig.create(device=device)
+    CommonConfig.get_or_create(device=device)
 
     yield
 
     Workflow.delete().where(Workflow.module_name == MODULE_NAME).execute()
-    PluginConfig.delete().where(PluginConfig.device == device.id).execute()
+    CommonConfig.delete().where(CommonConfig.device == device.id).execute()
     DeviceConfig.delete().where(DeviceConfig.id == device.id).execute()
 
 
@@ -134,6 +132,145 @@ async def test_workflow_start_lightweight(handlers):
 
     scheduler = handlers._get_scheduler(MODULE_NAME)
     await scheduler.stop_workflow()
+
+
+@pytest.mark.asyncio
+async def test_workflow_start_uses_v2_action_executor(handlers, monkeypatch):
+    """Action workflow must not be sent to the legacy plugin loader."""
+
+    action_calls = []
+    legacy_load_calls = []
+    device = DeviceConfig.get(DeviceConfig.name == MODULE_NAME)
+
+    class FakeAction:
+        async def prepare(self):
+            action_calls.append("prepare")
+
+        async def execute(self):
+            action_calls.append("execute")
+
+        async def cleanup(self):
+            action_calls.append("cleanup")
+
+    def fake_create(self, action_ref, ctx):
+        action_calls.append((action_ref, ctx.run_id, ctx.device_id, ctx.device_name))
+        return FakeAction()
+
+    def fake_load_plugin(self, plugin_id, target):
+        legacy_load_calls.append((plugin_id, target))
+        raise AssertionError("action_ref should not use legacy plugin loader")
+
+    monkeypatch.setattr(
+        "backend.infrastructure.plugins.factory.ActionFactory.create",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "backend.core.plugins.manager.PluginManager.load_plugin",
+        fake_load_plugin,
+    )
+
+    workflow_data = {
+        "schema_version": 2,
+        "id": "test-action-workflow-start",
+        "name": "Action Workflow",
+        "module_name": MODULE_NAME,
+        "nodes": [
+            {
+                "id": "node-1",
+                "type": "action",
+                "app_id": "nova_iron_galaxy",
+                "module_id": "order",
+                "action_id": "run",
+                "action_ref": "nova_iron_galaxy.order.run",
+                "device_id": device.id,
+                "position": {"x": 100, "y": 100},
+                "config": {},
+            }
+        ],
+        "edges": [],
+    }
+
+    await handlers.handle_workflow_save(
+        {"module_name": MODULE_NAME, "workflow_data": workflow_data}
+    )
+    start_result = await handlers.handle_workflow_start(
+        {"module_name": MODULE_NAME, "workflow_id": "test-action-workflow-start"}
+    )
+
+    scheduler = handlers.schedulers[MODULE_NAME]
+    task = scheduler.current_task
+    assert task is not None
+    await task
+
+    assert legacy_load_calls == []
+    assert action_calls == [
+        (
+            "nova_iron_galaxy.order.run",
+            start_result["run_id"],
+            device.id,
+            MODULE_NAME,
+        ),
+        "prepare",
+        "execute",
+        "cleanup",
+    ]
+    assert scheduler.last_result.success is True
+
+
+@pytest.mark.asyncio
+async def test_unmapped_legacy_workflow_still_uses_plugin_executor(handlers, monkeypatch):
+    load_calls = []
+    lifecycle_calls = []
+
+    class DummyPlugin:
+        async def prepare(self):
+            lifecycle_calls.append("prepare")
+
+        async def execute(self):
+            lifecycle_calls.append("execute")
+
+        async def cleanup(self):
+            lifecycle_calls.append("cleanup")
+
+    def fake_load_plugin(self, plugin_id, target):
+        load_calls.append((plugin_id, target))
+        return DummyPlugin()
+
+    monkeypatch.setattr(
+        "backend.core.plugins.manager.PluginManager.load_plugin",
+        fake_load_plugin,
+    )
+
+    workflow_data = {
+        "id": "test-legacy-plugin-workflow-start",
+        "name": "Legacy Plugin Workflow",
+        "module_name": MODULE_NAME,
+        "nodes": [
+            {
+                "id": "node-1",
+                "plugin_id": "custom-plugin",
+                "position": {"x": 100, "y": 100},
+                "config": {},
+            }
+        ],
+        "edges": [],
+    }
+
+    await handlers.handle_workflow_save(
+        {"module_name": MODULE_NAME, "workflow_data": workflow_data}
+    )
+    await handlers.handle_workflow_start(
+        {"module_name": MODULE_NAME, "workflow_id": "test-legacy-plugin-workflow-start"}
+    )
+
+    scheduler = handlers.schedulers[MODULE_NAME]
+    task = scheduler.current_task
+    assert task is not None
+    await task
+
+    assert load_calls == [("custom-plugin", MODULE_NAME)]
+    assert lifecycle_calls == ["prepare", "execute", "cleanup"]
+    assert scheduler.last_result.success is True
 
 
 @pytest.mark.asyncio

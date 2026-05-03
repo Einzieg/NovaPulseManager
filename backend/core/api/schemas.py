@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,7 +23,21 @@ class WorkflowNode(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str
-    plugin_id: str
+    plugin_id: Optional[str] = None
+    position: WorkflowPosition
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowNodeV2(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    type: Literal["action"] = "action"
+    app_id: str
+    module_id: str
+    action_id: str
+    action_ref: str
+    device_id: Optional[int] = None
     position: WorkflowPosition
     config: Dict[str, Any] = Field(default_factory=dict)
 
@@ -38,6 +52,7 @@ class WorkflowData(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str
+    schema_version: Optional[int] = None
     name: str = "Untitled"
     module_name: Optional[str] = None
     description: Optional[str] = None
@@ -47,9 +62,23 @@ class WorkflowData(BaseModel):
     updated_at: Optional[str] = None
 
 
+class WorkflowDataV2(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: Literal[2] = 2
+    id: str
+    name: str = "Untitled"
+    module_name: Optional[str] = None
+    description: Optional[str] = None
+    nodes: List[WorkflowNodeV2] = Field(default_factory=list)
+    edges: List[WorkflowEdge] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class SaveWorkflowRequest(BaseModel):
     module_name: str = Field(..., min_length=1)
-    workflow_data: WorkflowData
+    workflow_data: Union[WorkflowDataV2, WorkflowData]
 
 
 class StartWorkflowRequest(BaseModel):

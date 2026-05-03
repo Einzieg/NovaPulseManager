@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "module",
+  "id": "startup",
+  "name": "Startup",
+  "description": "Legacy startup task bridge metadata",
+  "actions": [
+    {
+      "id": "launch",
+      "name": "Launch",
+      "description": "Legacy start_task bridge metadata",
+      "entry_point": "actions.py:StartupLaunchAction"
+    }
+  ]
+}

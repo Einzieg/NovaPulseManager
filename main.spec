@@ -9,6 +9,8 @@ import rapidocr_onnxruntime
 print(sys.prefix)
 sys.setrecursionlimit(5000)
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 # -- rapidocr ONNX runtime model files inclusion --
 block_cipher = None
 
@@ -36,9 +38,9 @@ rapidocr_data = list(set(yaml_add_data + onnx_add_data))
 models = [
     (f'{Path(msc.__file__).parent}', 'msc'),
     (f'{Path(mtc.__file__).parent}', 'mtc'),
-    ("backend\\static", "static"),
-    ("backend\\plugins", "backend\\plugins"),
-    ("backend\\shared_templates", "shared_templates"),
+    (str(PROJECT_ROOT / "backend" / "static"), "backend/static"),
+    (str(PROJECT_ROOT / "backend" / "plugins"), "backend/plugins"),
+    (str(PROJECT_ROOT / "backend" / "shared_templates"), "backend/shared_templates"),
 ]
 # -- --
 datas = rapidocr_data + models
@@ -50,8 +52,8 @@ hiddenimports = ['cv2', 'msc', 'mtc']
 
 print(datas)
 a = Analysis(
-    ['backend\\main.py'],
-    pathex=[sys.prefix],
+    ['main.py'],
+    pathex=[str(PROJECT_ROOT), sys.prefix],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -70,7 +72,7 @@ exe = EXE(
     pyz,
     a.scripts,
     name='NovaAH',
-    icon='static/nova-autoScript.ico',
+    icon=str(PROJECT_ROOT / "backend" / "static" / "nova-autoScript.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

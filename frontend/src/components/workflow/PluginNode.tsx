@@ -2,11 +2,16 @@ import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { Box, Activity, CheckCircle2, AlertCircle, Settings2 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { WorkflowStatus } from '../../types/workflow';
+import { WorkflowStatus } from '../../types/api.generated';
 
 export interface PluginNodeData {
   label: string;
-  plugin_id: string;
+  plugin_id?: string;
+  app_id?: string;
+  module_id?: string;
+  action_id?: string;
+  action_ref?: string;
+  device_id?: number | null;
   status?: WorkflowStatus | 'idle';
   config?: Record<string, any>;
 }
@@ -46,7 +51,7 @@ const PluginNode = ({ data, selected }: NodeProps<PluginNodeData>) => {
         
         <div className="flex-1 overflow-hidden">
           <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">
-            {data.plugin_id}
+            {data.action_ref || data.plugin_id}
           </div>
           <div className="text-sm font-extrabold tracking-tight text-gray-900 truncate">
             {data.label}

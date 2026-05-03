@@ -1,33 +1,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .schemas import (
-    ConfigUpdateRequest,
-    DeleteWorkflowRequest,
-    DeviceCreateRequest,
-    DeviceDeleteRequest,
-    DeviceUpdateRequest,
-    PluginConfigGetRequest,
-    PluginConfigUpdateRequest,
-    SaveWorkflowRequest,
-    SetCurrentWorkflowRequest,
-    StartTaskRequest,
-    StartWorkflowRequest,
-    StopWorkflowRequest,
-    StopTaskRequest,
-)
+from backend.api.routes import actions, apps, devices, plugins, runs, settings, tasks, workflows
 from .ws_manager import FastApiWebSocketManager
 
 _logger = logging.getLogger(__name__)
 
 
 def create_app(handlers: Any, ws_manager: FastApiWebSocketManager) -> FastAPI:
-    """Create FastAPI app and wire handlers."""
+    """Create FastAPI app and register REST routers + WebSocket endpoint."""
 
     app = FastAPI(
         title="Nova Pulse Manager API",
@@ -43,178 +29,16 @@ def create_app(handlers: Any, ws_manager: FastApiWebSocketManager) -> FastAPI:
         allow_headers=["*"],
     )
 
-    rpc_handlers: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
-        "task.start": handlers.handle_task_start,
-        "task.stop": handlers.handle_task_stop,
-        "module.list": handlers.handle_module_list,
-        "device.create": handlers.handle_device_create,
-        "device.update": handlers.handle_device_update,
-        "device.delete": handlers.handle_device_delete,
-        "plugin.list": handlers.handle_plugin_list,
-        "workflow.save": handlers.handle_workflow_save,
-        "workflow.load": handlers.handle_workflow_load,
-        "workflow.start": handlers.handle_workflow_start,
-        "workflow.stop": handlers.handle_workflow_stop,
-        "workflow.list": handlers.handle_workflow_list,
-        "workflow.get": handlers.handle_workflow_get,
-        "workflow.delete": handlers.handle_workflow_delete,
-        "workflow.set_current": handlers.handle_workflow_set_current,
-        "plugin.config.get": handlers.handle_plugin_config_get,
-        "plugin.config.update": handlers.handle_plugin_config_update,
-        "config.get": handlers.handle_config_get,
-        "config.update": handlers.handle_config_update,
-    }
+    app.include_router(devices.create_router(handlers))
+    app.include_router(apps.create_router(handlers))
+    app.include_router(actions.create_router(handlers))
+    app.include_router(plugins.create_router(handlers))
+    app.include_router(tasks.create_router(handlers))
+    app.include_router(workflows.create_router(handlers))
+    app.include_router(runs.create_router(handlers))
+    app.include_router(settings.create_router(handlers))
 
-    @app.get("/api/v1/health")
-    async def health() -> Dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/api/v1/modules")
-    async def list_modules() -> Dict[str, Any]:
-        try:
-            return await handlers.handle_module_list({})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/devices")
-    async def list_devices() -> Dict[str, Any]:
-        """设备列表（推荐使用）。"""
-        try:
-            result = await handlers.handle_module_list({})
-            return {"devices": result.get("modules", [])}
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/devices/create")
-    async def create_device(req: DeviceCreateRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_device_create(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/devices/update")
-    async def update_device(req: DeviceUpdateRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_device_update(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/devices/delete")
-    async def delete_device(req: DeviceDeleteRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_device_delete(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/plugins")
-    async def list_plugins() -> Dict[str, Any]:
-        try:
-            return await handlers.handle_plugin_list({})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/plugins/config")
-    async def get_plugin_config(device_name: str, plugin_id: str) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_plugin_config_get(
-                {"device_name": device_name, "plugin_id": plugin_id}
-            )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/plugins/config/update")
-    async def update_plugin_config(req: PluginConfigUpdateRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_plugin_config_update(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/tasks/start")
-    async def start_task(req: StartTaskRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_task_start(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/tasks/stop")
-    async def stop_task(req: StopTaskRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_task_stop(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/workflows/save")
-    async def save_workflow(req: SaveWorkflowRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_save(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/workflows/load")
-    async def load_workflow(module_name: str) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_load({"module_name": module_name})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/workflows/list")
-    async def list_workflows(module_name: str) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_list({"module_name": module_name})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/workflows/get")
-    async def get_workflow(workflow_id: str, module_name: Optional[str] = None) -> Dict[str, Any]:
-        try:
-            payload: Dict[str, Any] = {"workflow_id": workflow_id}
-            if module_name:
-                payload["module_name"] = module_name
-            return await handlers.handle_workflow_get(payload)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/workflows/delete")
-    async def delete_workflow(req: DeleteWorkflowRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_delete(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/workflows/set-current")
-    async def set_current_workflow(req: SetCurrentWorkflowRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_set_current(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/workflows/stop")
-    async def stop_workflow(req: StopWorkflowRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_stop(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/workflows/start")
-    async def start_workflow(req: StartWorkflowRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_workflow_start(req.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.get("/api/v1/config")
-    async def get_config() -> Dict[str, Any]:
-        try:
-            return await handlers.handle_config_get({})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    @app.post("/api/v1/config/update")
-    async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
-        try:
-            return await handlers.handle_config_update(req.model_dump(exclude_none=True))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    rpc_handlers = _build_rpc_handlers(handlers)
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -264,6 +88,37 @@ def create_app(handlers: Any, ws_manager: FastApiWebSocketManager) -> FastAPI:
     return app
 
 
+def _build_rpc_handlers(
+    handlers: Any,
+) -> Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]]:
+    return {
+        "task.start": handlers.handle_task_start,
+        "task.stop": handlers.handle_task_stop,
+        "module.list": handlers.handle_module_list,
+        "device.create": handlers.handle_device_create,
+        "device.update": handlers.handle_device_update,
+        "device.delete": handlers.handle_device_delete,
+        "plugin.list": handlers.handle_plugin_list,
+        "app.list": handlers.handle_app_list,
+        "action.list": handlers.handle_action_list,
+        "workflow.save": handlers.handle_workflow_save,
+        "workflow.load": handlers.handle_workflow_load,
+        "workflow.start": handlers.handle_workflow_start,
+        "workflow.stop": handlers.handle_workflow_stop,
+        "workflow.list": handlers.handle_workflow_list,
+        "workflow.get": handlers.handle_workflow_get,
+        "workflow.delete": handlers.handle_workflow_delete,
+        "workflow.set_current": handlers.handle_workflow_set_current,
+        "run.get": handlers.handle_run_get,
+        "run.cancel": handlers.handle_run_cancel,
+        "run.list": handlers.handle_run_list,
+        "plugin.config.get": handlers.handle_plugin_config_get,
+        "plugin.config.update": handlers.handle_plugin_config_update,
+        "config.get": handlers.handle_config_get,
+        "config.update": handlers.handle_config_update,
+    }
+
+
 def _normalize_ws_message(incoming: Any) -> tuple[str, Dict[str, Any]]:
     if isinstance(incoming, dict) and "event" in incoming and "data" in incoming:
         event = str(incoming.get("event"))
@@ -274,4 +129,3 @@ def _normalize_ws_message(incoming: Any) -> tuple[str, Dict[str, Any]]:
         return "message", incoming
 
     return "unknown", {}
-

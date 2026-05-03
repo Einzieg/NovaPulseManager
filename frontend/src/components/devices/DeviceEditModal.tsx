@@ -277,6 +277,7 @@ export default function DeviceEditModal({ device, onClose, onSuccess }: DeviceEd
                 <WorkflowEditor 
                   key={selectedWorkflowId} 
                   moduleName={device.name} 
+                  deviceId={device.id}
                   workflowId={selectedWorkflowId} 
                 />
               </div>

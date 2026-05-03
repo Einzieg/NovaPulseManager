@@ -1,176 +1,58 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { X, Settings2, Save, Trash2, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Settings2, Save, Trash2, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Node } from 'reactflow';
 import { toast } from 'sonner';
-import websocketService from '../../services/websocket';
-
-interface ConfigField {
-  name: string;
-  type: string;
-  value: any;
-  default: any;
-}
-
-const FIELD_LABELS: Record<string, string> = {
-  normal_monster: '普通怪',
-  elite_monster: '精英怪',
-  red_monster: '红色怪',
-  wreckage: '残骸',
-  hidden_switch: '雷达开关',
-  hidden_policy: '雷达策略',
-  hidden_times: '雷达次数',
-  hidden_wreckage: '雷达残骸',
-  order_switch: '指令开关',
-  order_policy: '指令策略',
-  order_hasten_policy: '催促策略',
-  order_speeduo_policy: '加速策略',
-  order_times: '指令次数',
-  autostart_simulator: '自动启动模拟器',
-};
 
 interface NodeConfigPanelProps {
   node: Node | null;
   deviceName: string;
   onClose: () => void;
   onDelete: (nodeId: string) => void;
+  onUpdateConfig: (nodeId: string, config: Record<string, any>) => void;
 }
 
-const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ node, deviceName, onClose, onDelete }) => {
-  const [fields, setFields] = useState<ConfigField[]>([]);
-  const [values, setValues] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
+  node,
+  deviceName,
+  onClose,
+  onDelete,
+  onUpdateConfig,
+}) => {
+  const [configText, setConfigText] = useState('{}');
   const [error, setError] = useState<string | null>(null);
-
-  const loadConfig = useCallback((pluginId: string, signal?: { cancelled: boolean }) => {
-    setLoading(true);
-    setError(null);
-    websocketService
-      .getPluginConfig(deviceName, pluginId)
-      .then((res) => {
-        if (signal?.cancelled) return;
-        const list: ConfigField[] = res.fields || [];
-        setFields(list);
-        const init: Record<string, any> = {};
-        for (const f of list) {
-          init[f.name] = f.value;
-        }
-        setValues(init);
-      })
-      .catch((err) => {
-        if (signal?.cancelled) return;
-        console.error('Failed to load plugin config:', err);
-        setFields([]);
-        setError('加载配置失败');
-      })
-      .finally(() => {
-        if (!signal?.cancelled) setLoading(false);
-      });
-  }, [deviceName]);
 
   useEffect(() => {
     if (!node) return;
-    const pluginId = node.data.plugin_id;
-    if (!pluginId || !deviceName) return;
-
-    const signal = { cancelled: false };
-    loadConfig(pluginId, signal);
-    return () => { signal.cancelled = true; };
-  }, [node?.id, node?.data.plugin_id, deviceName, loadConfig]);
-
-  const handleChange = useCallback((name: string, value: any) => {
-    setValues((prev) => ({ ...prev, [name]: value }));
-  }, []);
-
-  const handleSave = useCallback(async () => {
-    if (!node) return;
-    setSaving(true);
-    try {
-      await websocketService.updatePluginConfig(deviceName, node.data.plugin_id, values);
-      toast.success('配置已保存');
-    } catch (err) {
-      console.error('Failed to save plugin config:', err);
-      toast.error('保存失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [node, deviceName, values]);
+    setConfigText(JSON.stringify(node.data.config || {}, null, 2));
+    setError(null);
+  }, [node?.id, node?.data.config]);
 
   if (!node) return null;
 
-  const renderField = (field: ConfigField) => {
-    const label = FIELD_LABELS[field.name] || field.name;
-    const val = values[field.name];
-
-    if (field.type === 'BooleanField') {
-      return (
-        <div key={field.name} className="flex items-center justify-between py-3 px-4 rounded-2xl bg-gray-100/50">
-          <span className="text-sm font-medium text-gray-900">{label}</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={!!val}
-            aria-label={label}
-            onClick={() => handleChange(field.name, !val)}
-            className={clsx(
-              'relative w-11 h-6 rounded-full transition-colors duration-200',
-              val ? 'bg-ios-accent' : 'bg-gray-300'
-            )}
-          >
-            <span
-              className={clsx(
-                'absolute top-0.5 left-0.5 w-5 h-5 bg-ios-surface rounded-full shadow transition-transform duration-200',
-                val && 'translate-x-5'
-              )}
-            />
-          </button>
-        </div>
-      );
+  const handleSave = () => {
+    try {
+      const parsed = configText.trim() ? JSON.parse(configText) : {};
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+        throw new Error('Config must be a JSON object');
+      }
+      onUpdateConfig(node.id, parsed);
+      setError(null);
+      toast.success('节点配置已更新');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'JSON 格式错误';
+      setError(message);
+      toast.error('配置格式错误', { description: message });
     }
-
-    if (field.type === 'IntegerField') {
-      return (
-        <div key={field.name} className="group">
-          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5 ml-4">
-            {label}
-          </label>
-          <input
-            type="number"
-            value={val ?? ''}
-            onChange={(e) => {
-              const parsed = parseInt(e.target.value);
-              handleChange(field.name, isNaN(parsed) ? '' : parsed);
-            }}
-            className={clsx(
-              'w-full bg-gray-100/50 border-none rounded-2xl py-4 px-5 text-sm font-medium text-gray-900',
-              'placeholder:text-gray-400 focus:ring-2 focus:ring-gray-900/5 transition-all outline-none',
-              'shadow-[inset_0_2px_4px_rgba(0,0,0,0.03)]'
-            )}
-          />
-        </div>
-      );
-    }
-
-    // CharField / default → text input
-    return (
-      <div key={field.name} className="group">
-        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2.5 ml-4">
-          {label}
-        </label>
-        <input
-          type="text"
-          value={val ?? ''}
-          onChange={(e) => handleChange(field.name, e.target.value)}
-          className={clsx(
-            'w-full bg-gray-100/50 border-none rounded-2xl py-4 px-5 text-sm font-medium text-gray-900',
-            'placeholder:text-gray-400 focus:ring-2 focus:ring-gray-900/5 transition-all outline-none',
-            'shadow-[inset_0_2px_4px_rgba(0,0,0,0.03)]'
-          )}
-        />
-      </div>
-    );
   };
+
+  const rows = [
+    ['Device', `${deviceName}${node.data.device_id ? ` (#${node.data.device_id})` : ''}`],
+    ['App', node.data.app_id || '-'],
+    ['Module', node.data.module_id || '-'],
+    ['Action', node.data.action_id || '-'],
+    ['Action Ref', node.data.action_ref || node.data.plugin_id || '-'],
+  ];
 
   return (
     <aside
@@ -182,7 +64,6 @@ const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ node, deviceName, onC
         'animate-in slide-in-from-right-12 fade-in'
       )}
     >
-      {/* Header */}
       <div className="p-8 pb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-[20px] bg-ios-surface shadow-[0_8px_16px_-4px_rgba(0,0,0,0.05)] flex items-center justify-center border border-white/80">
@@ -190,10 +71,10 @@ const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ node, deviceName, onC
           </div>
           <div>
             <h3 className="text-base font-extrabold tracking-tight text-gray-900 leading-none mb-1.5">
-              CONFIGURATION
+              NODE CONFIG
             </h3>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">
-              {node.data.plugin_id}
+              {node.data.action_ref || node.data.plugin_id}
             </p>
           </div>
         </div>
@@ -202,34 +83,38 @@ const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ node, deviceName, onC
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-8 space-y-4 custom-scrollbar">
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 size={24} className="animate-spin text-gray-400" />
-          </div>
-        ) : error ? (
-          <div className="p-6 rounded-[32px] bg-rose-50/50 border border-rose-100 text-center space-y-3">
-            <AlertCircle size={20} className="text-rose-400 mx-auto" />
-            <p className="text-xs text-rose-500">{error}</p>
-            <button
-              onClick={() => loadConfig(node.data.plugin_id)}
-              className="inline-flex items-center gap-1.5 text-[10px] font-bold text-rose-500 hover:text-rose-600 transition-colors"
-            >
-              <RefreshCw size={12} />
-              重试
-            </button>
-          </div>
-        ) : fields.length === 0 ? (
-          <div className="p-6 rounded-[32px] bg-gray-100/30 border border-white/40 text-center">
-            <p className="text-xs text-gray-500">该插件没有可配置的参数</p>
-          </div>
-        ) : (
-          fields.map(renderField)
-        )}
+      <div className="flex-1 overflow-y-auto px-8 space-y-5 custom-scrollbar">
+        <section className="space-y-2">
+          {rows.map(([label, value]) => (
+            <div key={label} className="rounded-2xl bg-gray-100/40 px-4 py-3">
+              <div className="text-[9px] font-black uppercase tracking-widest text-gray-400">{label}</div>
+              <div className="mt-1 break-all text-xs font-bold text-gray-900">{value}</div>
+            </div>
+          ))}
+        </section>
+
+        <section>
+          <label className="mb-2 block text-[10px] font-black uppercase tracking-widest text-gray-400">
+            Node config JSON
+          </label>
+          <textarea
+            value={configText}
+            onChange={(e) => setConfigText(e.target.value)}
+            spellCheck={false}
+            className={clsx(
+              'h-56 w-full resize-none rounded-2xl border-none bg-gray-100/50 p-4 font-mono text-xs text-gray-900',
+              'shadow-[inset_0_2px_4px_rgba(0,0,0,0.03)] outline-none focus:ring-2 focus:ring-gray-900/5'
+            )}
+          />
+          {error && (
+            <div className="mt-3 flex items-center gap-2 rounded-2xl bg-rose-50 p-3 text-xs text-rose-500">
+              <AlertCircle size={14} />
+              <span>{error}</span>
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* Footer */}
       <div className="p-8 mt-auto">
         <div className="flex gap-3">
           <button
@@ -244,15 +129,13 @@ const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({ node, deviceName, onC
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || loading || fields.length === 0 || !!error}
             className={clsx(
               'flex-1 flex items-center justify-center gap-2 py-4 rounded-[24px] font-bold text-[10px] tracking-widest transition-all',
-              'bg-ios-accent text-ios-on-accent shadow-[0_16px_32px_-8px_rgba(0,0,0,0.3)] hover:opacity-90 active:scale-95',
-              'disabled:opacity-50'
+              'bg-ios-accent text-ios-on-accent shadow-[0_16px_32px_-8px_rgba(0,0,0,0.3)] hover:opacity-90 active:scale-95'
             )}
           >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            <span>{saving ? '保存中...' : '保存'}</span>
+            <Save size={14} />
+            <span>保存</span>
           </button>
         </div>
       </div>
